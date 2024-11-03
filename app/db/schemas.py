@@ -109,6 +109,10 @@ class AnswerOptions(BaseModel):
     def from_str(cls, answers: str):
         return cls(answers=json.loads(answers))
 
+    @classmethod
+    def from_json(cls, answers: dict):
+        return cls(answers=answers)
+
 
 class DbQuestion(BaseModel):
     question_id: str
@@ -117,6 +121,7 @@ class DbQuestion(BaseModel):
     points: int
     answers: AnswerOptions
     question_type: QuestionType
+    quiz_id: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_answers(cls, v):
@@ -142,10 +147,6 @@ class DbQuestion(BaseModel):
         if v < 0:
             raise ValueError("Question number must be greater than 0")
         return v
-
-    @field_validator("question_type")
-    def validate_question_type(cls, v):
-        return v.value
 
     def model_dump_json(self):
         return {
@@ -181,7 +182,7 @@ class DbQuestion(BaseModel):
             question=question,
             question_number=question_number,
             points=points,
-            answers=AnswerOptions.from_str(answers),
+            answers=AnswerOptions.from_json(answers),
             question_type=QuestionType.from_str(question_type),
         )
 
@@ -194,4 +195,33 @@ class DbQuestion(BaseModel):
             points=question_dict.get("points"),
             answers=AnswerOptions(answers=question_dict.get("answers")),
             question_type=QuestionType(question_dict.get("question_type")),
+        )
+
+
+class DbQuiz(BaseModel):
+    quiz_id: str
+    quiz_name: str
+    quiz_description: str
+
+    def model_dump_json(self):
+        return {
+            "quiz_id": self.quiz_id,
+            "quiz_name": self.quiz_name,
+            "quiz_description": self.quiz_description,
+        }
+
+    @classmethod
+    def get_from_db(cls, quiz_id: str, quiz_name: str, quiz_description: str):
+        return cls(
+            quiz_id=quiz_id,
+            quiz_name=quiz_name,
+            quiz_description=quiz_description,
+        )
+
+    @classmethod
+    def get_from_cache(cls, quiz_dict: dict):
+        return cls(
+            quiz_id=quiz_dict.get("quiz_id"),
+            quiz_name=quiz_dict.get("quiz_name"),
+            quiz_description=quiz_dict.get("quiz_description"),
         )

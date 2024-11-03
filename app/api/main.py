@@ -11,7 +11,7 @@ cache_manager = CacheManager()
 db_manager = DbManager()
 pubsub_manager = PubSubManager()
 
-WEBSOCKET_TIMEOUT = os.getenv("WEBSOCKET_TIMEOUT", 360)
+WEBSOCKET_TIMEOUT = int(os.getenv("WEBSOCKET_TIMEOUT", "360"))
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
         await pubsub_manager.close()
 
 
-app = FastAPI(lifespan=lifespan)  # Added lifespan parameter here
+app = FastAPI(lifespan=lifespan)
 
 
 @app.websocket("/{session_id}")

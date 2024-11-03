@@ -94,12 +94,3 @@ def get_payload(
     except Exception as e:
         logger.error(f"Error in get_payload: {e}")
         raise Errors.ServerError.to_websocket_close()
-
-
-def handle_pubsub_message(message: dict, quiz_data: QuizData) -> None:
-    """
-    Handles messages from the moderator's WebSocket connection.
-    Returns payload to send to ws after receiving a pub message.
-    """
-    message
-    return message

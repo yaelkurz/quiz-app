@@ -12,8 +12,8 @@ import redis
 
 logger = logging.getLogger(__name__)
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = os.getenv("REDIS_PORT", 6379)
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 db_manager = DbManager()
@@ -24,8 +24,16 @@ class CacheManager:
         self.client = redis.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
-            password=REDIS_PASSWORD,
         )
+        self.verify_connection()
+
+    def verify_connection(self):
+        try:
+            self.client.ping()
+            logger.info("Connected to Redis successfully.")
+        except redis.RedisError as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            raise
 
     def get_cache_key(self, session_id: str):
         return f"session:{session_id}"

@@ -11,11 +11,10 @@ from app.api.errors import Errors
 from app.api.handlers import (
     handle_message,
     get_payload,
-    handle_pubsub_message,
 )
 
 logger = logging.getLogger(__name__)
-HEARTBEAT_INTERVAL = os.getenv("HEARTBEAT_INTERVAL", 30)
+HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "60"))
 
 
 class WebSocketManager:
@@ -92,10 +91,8 @@ class WebSocketManager:
                     )
                     return
 
-                payload = handle_pubsub_message(message, self.quiz_data)
-
-                if payload:
-                    await self.dispatch_to_client(payload)
+                if message:
+                    await self.dispatch_to_client(message)
 
         except Exception as e:
             logger.error(f"Error in listen_to_pubsub_channel: {e}")
@@ -108,6 +105,9 @@ class WebSocketManager:
         try:
             while True:
 
+                if self.websocket.client_state.value != 1:
+                    break
+
                 message = await self.websocket.receive_json()
 
                 self.quiz_data = handle_message(
@@ -118,13 +118,12 @@ class WebSocketManager:
 
                 self.cache_manager.update_quiz_data(self.quiz_data)
 
-                await self.pubsub_manager.add_payload_to_publish_queue(
+                self.pubsub_manager.add_payload_to_publish_queue(
                     self.session_id, payload
                 )
 
         except Exception as e:
             logger.info(f"error in listen_to_websocket: {e}")
-            raise Errors.ServerError
 
     async def close_connection(self, error: Optional[Any] = None) -> None:
         """

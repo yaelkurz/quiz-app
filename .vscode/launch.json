@@ -5,13 +5,20 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "run (Launch)",
+      "name": "Run API Server(Launch)",
       "type": "debugpy",
       "request": "launch",
       "program": "run.py",
       "console": "integratedTerminal",
       "justMyCode": true,
       "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal"
     }
   ]
 }
