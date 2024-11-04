@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import Tuple, Any, Optional
+from typing import Any, Optional, List
 from fastapi import WebSocket
 import logging
 from app.cache.models import CacheManager, PubSubManager, QuizData
@@ -14,7 +14,7 @@ from app.api.handlers import (
 )
 
 logger = logging.getLogger(__name__)
-HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "60"))
+HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "3"))
 
 
 class WebSocketManager:
@@ -37,7 +37,7 @@ class WebSocketManager:
         self.quiz_data: Optional[QuizData] = None
         self.user = Optional[DbUser]
 
-    async def validate_connection(self) -> bool:
+    async def validate_connection_and_initialize_cache(self) -> bool:
         """Validate the WebSocket connection parameters."""
         try:
             user_id = self.websocket.headers.get("user_id")
@@ -49,6 +49,7 @@ class WebSocketManager:
                 raise Errors.MISSING_USER_ID_HEADER
 
             if self.connection_type == WsConnectionType.MODERATOR:
+
                 db_session = self.db_manager.quiz_sessions.get_session(self.session_id)
 
                 if db_session is None:
@@ -57,8 +58,12 @@ class WebSocketManager:
                 if db_session.moderator_id != user_id:
                     raise Errors.USER_FORBIDDEN
 
-                self.quiz_data = self.cache_manager.add_session_data_to_cache(
-                    db_session
+                quiz_questions = self.db_manager.questions.get_quiz_questions(
+                    db_session.quiz_id
+                )
+
+                self.quiz_data = self.cache_manager.add_to_cache(
+                    db_session, quiz_questions
                 )
 
             elif self.connection_type == WsConnectionType.PARTICIPANT:
@@ -68,7 +73,7 @@ class WebSocketManager:
                 if self.quiz_data is None:
                     raise Errors.SESSION_NOT_FOUND
 
-            if self.quiz_data.quiz_state != QuizState.WAITING:
+            if self.quiz_data.quiz_state != QuizState.WAITING_TO_START:
                 raise Errors.SESSION_CLOSED_FOR_NEW_PARTICIPANTS
 
             self.user = self.db_manager.users.get_user(user_id)
@@ -110,13 +115,19 @@ class WebSocketManager:
 
                 message = await self.websocket.receive_json()
 
+                self.quiz_data = self.cache_manager.get_quiz_data(self.session_id)
+
                 self.quiz_data = handle_message(
-                    message, self.quiz_data, self.connection_type
+                    message,
+                    self.quiz_data,
+                    self.connection_type,
+                    self.user,
+                    self.cache_manager.get_timestamp(),
                 )
 
-                payload = get_payload(self.quiz_data)
-
                 self.cache_manager.update_quiz_data(self.quiz_data)
+
+                payload = get_payload(self.quiz_data)
 
                 self.pubsub_manager.add_payload_to_publish_queue(
                     self.session_id, payload
@@ -139,24 +150,44 @@ class WebSocketManager:
         try:
             while True:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
-                await self.dispatch_to_client(payload={"type": "heartbeat"})
+
+                self.quiz_data = self.cache_manager.get_quiz_data(self.session_id)
+
+                payload = get_payload(self.quiz_data)
+
+                await self.dispatch_to_client(payload=payload)
         except Exception as e:
             logger.error(f"Error in heartbeat: {e}")
 
-    def manage_tasks(self) -> Tuple[asyncio.Task, asyncio.Task, asyncio.Task]:
+    def manage_tasks(self) -> List[asyncio.Task]:
         try:
-            pubsub_task = asyncio.create_task(
-                self.listen_to_pubsub_channel(),
-                name=f"Pubsub Task for {self.session_id}",
+            tasks = []
+            tasks.append(
+                asyncio.create_task(
+                    self.listen_to_pubsub_channel(),
+                    name=f"Pubsub Task for {self.session_id}",
+                )
             )
-            ws_task = asyncio.create_task(
-                self.listen_to_websocket(), name=f"WS Task for {self.session_id}"
+            tasks.append(
+                asyncio.create_task(
+                    self.listen_to_websocket(), name=f"WS Task for {self.session_id}"
+                )
             )
 
-            heartbeat_task = asyncio.create_task(
-                self.heartbeat(), name=f"Heartbeat Task for {self.session_id}"
+            tasks.append(
+                asyncio.create_task(
+                    self.heartbeat(), name=f"Heartbeat Task for {self.session_id}"
+                )
             )
-            return pubsub_task, ws_task, heartbeat_task
+            if self.connection_type == WsConnectionType.MODERATOR:
+                tasks.append(
+                    asyncio.create_task(
+                        self.quiz_timer(),
+                        name=f"Question Timeout Task for {self.session_id}",
+                    )
+                )
+
+            return tasks
         except Exception as e:
             logger.error(f"Error in manage_tasks: {e}")
             raise e
@@ -198,4 +229,44 @@ class WebSocketManager:
             await self.websocket.send_json(payload)
         except Exception as e:
             logger.error(f"Error dispatching data to client: {e}")
+            raise e
+
+    async def quiz_timer(self) -> None:
+        """
+        This is for timing out questions.
+        """
+        try:
+            while True:
+                quiz_data = self.cache_manager.get_quiz_data(self.session_id)
+
+                if quiz_data.quiz_state != QuizState.ACTIVE:
+                    await asyncio.sleep(1)
+                    continue
+
+                current_timestamp = self.cache_manager.get_timestamp()
+
+                end_timestamp = quiz_data.current_question_end_timestamp
+
+                if current_timestamp >= end_timestamp:
+
+                    self.quiz_data = handle_message(
+                        {"type": "timeout"},
+                        self.quiz_data,
+                        self.connection_type,
+                        self.user,
+                        current_timestamp,
+                    )
+
+                    self.cache_manager.update_quiz_data(self.quiz_data)
+
+                    payload = get_payload(self.quiz_data)
+
+                    self.pubsub_manager.add_payload_to_publish_queue(
+                        self.session_id, payload
+                    )
+
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Error in question_clock: {e}")
             raise e

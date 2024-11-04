@@ -1,12 +1,11 @@
 import asyncio
 import logging
 import json
-from app.db.models import DbManager
 from app.cache.schemas import QuizState
 from app.db.schemas import DbSession, DbQuestion
 from app.api.errors import Errors
 from pydantic import BaseModel, field_validator
-from typing import Optional, AsyncGenerator, Dict
+from typing import Optional, AsyncGenerator, Dict, List
 import os
 import redis
 
@@ -15,8 +14,6 @@ logger = logging.getLogger(__name__)
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-
-db_manager = DbManager()
 
 
 class CacheManager:
@@ -64,7 +61,9 @@ class CacheManager:
             logger.error(f"Redis error: {e}")
             return None
 
-    def add_session_data_to_cache(self, session_data: DbSession) -> "QuizData":
+    def add_to_cache(
+        self, session_data: DbSession, quiz_questions: List[DbQuestion]
+    ) -> "QuizData":
         """
         Add session data to the cache.
         """
@@ -73,10 +72,11 @@ class CacheManager:
 
             quiz_data = QuizData(
                 session_id=session_data.session_id,
-                quiz_state=QuizState.WAITING,
+                quiz_state=QuizState.WAITING_TO_START,
                 quiz_id=session_data.quiz_id,
                 current_question_number=0,
                 current_question=None,
+                questions=quiz_questions,
             )
 
             self.client.set(cache_key, json.dumps(quiz_data.model_dump_json()))
@@ -137,6 +137,13 @@ class CacheManager:
                         if quiz_data_dict.get("current_question")
                         else None
                     ),
+                    current_question_end_timestamp=quiz_data_dict.get(
+                        "current_question_end_timestamp"
+                    ),
+                    questions=[
+                        DbQuestion.get_from_cache(q)
+                        for q in quiz_data_dict.get("questions")
+                    ],
                 )
 
             else:
@@ -166,6 +173,12 @@ class CacheManager:
     def close(self):
         self.client.close()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
 
 class QuizData(BaseModel):
     session_id: str
@@ -173,6 +186,8 @@ class QuizData(BaseModel):
     quiz_id: str
     current_question_number: int
     current_question: Optional[DbQuestion]
+    current_question_end_timestamp: Optional[int] = None
+    questions: List[DbQuestion]
 
     @field_validator("quiz_state")
     def validate_quiz_state(cls, v):
@@ -189,6 +204,8 @@ class QuizData(BaseModel):
                 if self.current_question
                 else None
             ),
+            "current_question_end_timestamp": self.current_question_end_timestamp,
+            "questions": [q.model_dump_json() for q in self.questions],
         }
 
     def client_model_dump_json(self):
@@ -205,14 +222,32 @@ class QuizData(BaseModel):
                 if self.current_question
                 else None
             ),
+            "current_question_end_timestamp": self.current_question_end_timestamp,
         }
 
-    def start_quiz(self):
+    def start_quiz(self, current_timestamp: int):
         self.quiz_state = QuizState.ACTIVE
         self.current_question_number = 1
-        self.current_question = db_manager.questions.get_question_by_index(
-            self.quiz_id, self.current_question_number
+        self.current_question = self.questions[self.current_question_number - 1]
+        self.current_question_end_timestamp = self.current_question.get_end_timestamp(
+            current_timestamp
         )
+
+    def timeout_question(self):
+        self.quiz_state = QuizState.QUESTION_TIMEDOUT
+        self.current_question_end_timestamp = None
+
+    def next_question(self, current_timestamp: int):
+        self.current_question_number += 1
+        self.current_question = self.questions[self.current_question_number - 1]
+        self.quiz_state = QuizState.ACTIVE
+        self.current_question_end_timestamp = self.current_question.get_end_timestamp(
+            current_timestamp
+        )
+
+    def end_quiz(self):
+        self.quiz_state = QuizState.ENDED
+        self.current_question_end_timestamp = None
 
 
 class PubSubManager:
@@ -310,3 +345,9 @@ class PubSubManager:
         self._publish_loop_task = asyncio.create_task(self._publish_loop())
         logger.info("PubSubManager started")
         return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

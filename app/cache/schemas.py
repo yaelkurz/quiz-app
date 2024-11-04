@@ -1,12 +1,8 @@
 from enum import StrEnum
-import json
-from pydantic import BaseModel, field_validator
-from app.db.schemas import DbQuestion, DbSession
-from typing import Optional
 
 
 class QuizState(StrEnum):
-    WAITING = "waiting"
+    WAITING_TO_START = "waiting"
     ACTIVE = "active"
-    PAUSED = "paused"
+    QUESTION_TIMEDOUT = "timedout"
     ENDED = "ended"

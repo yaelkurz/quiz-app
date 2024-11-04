@@ -1,7 +1,7 @@
 import json
 import os
 import logging
-from typing import Dict, List, Optional
+from typing import List, Optional
 import psycopg2
 from psycopg2.extras import DictCursor
 from app.db.schemas import (
@@ -11,6 +11,7 @@ from app.db.schemas import (
     DbSession,
     DbQuestion,
     DbQuiz,
+    UserAnswer,
 )
 from app.api.errors import Errors
 
@@ -42,6 +43,7 @@ class QuestionsRepository(BaseRepository):
                 question_type TEXT NOT NULL,
                 points INTEGER NOT NULL,
                 answers JSONB,
+                seconds_to_answer INTEGER NOT NULL,
                 PRIMARY KEY (question_id, quiz_id),
                 FOREIGN KEY (quiz_id) REFERENCES quizzes(quiz_id)
             )
@@ -58,15 +60,16 @@ class QuestionsRepository(BaseRepository):
                 """
                 INSERT INTO questions (
                     question_id, quiz_id, question, question_number,
-                    question_type, points, answers
+                    question_type, points, answers, seconds_to_answer
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (question_id, quiz_id) DO UPDATE SET
                     question = EXCLUDED.question,
                     question_number = EXCLUDED.question_number,
                     question_type = EXCLUDED.question_type,
                     points = EXCLUDED.points,
-                    answers = EXCLUDED.answers
+                    answers = EXCLUDED.answers,
+                    seconds_to_answer = EXCLUDED.seconds_to_answer
                 """,
                 (
                     question.question_id,
@@ -76,6 +79,7 @@ class QuestionsRepository(BaseRepository):
                     question.question_type,
                     question.points,
                     json.dumps(question.answers.model_dump_json()),
+                    question.seconds_to_answer,
                 ),
             )
             self.connection.commit()
@@ -84,25 +88,41 @@ class QuestionsRepository(BaseRepository):
             logger.error(f"Error inserting question: {e}")
             return False
 
-    def get_question_by_index(self, quiz_id: str, question_index: int) -> DbQuestion:
+    def delete_question(self, question_id: str, quiz_id: str) -> bool:
         """
-        Gets the first question for a quiz.
+        Deletes a question from the questions table.
+        """
+        try:
+            self.cursor.execute(
+                """
+                DELETE FROM questions
+                WHERE question_id = %s AND quiz_id = %s
+                """,
+                (question_id, quiz_id),
+            )
+            self.connection.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting question: {e}")
+            return False
+
+    def get_quiz_questions(self, quiz_id: str) -> List[DbQuestion]:
+        """
+        Gets all questions for a quiz.
         """
         try:
             self.cursor.execute(
                 """
                 SELECT question_id, question, question_number, question_type,
-                       points, answers
+                       points, answers, seconds_to_answer
                 FROM questions
                 WHERE quiz_id = %s
-                AND question_number = %s
                 ORDER BY question_number
-                LIMIT 1
                 """,
-                (quiz_id, question_index),
+                (quiz_id,),
             )
-            row = self.cursor.fetchone()
-            return (
+            rows = self.cursor.fetchall()
+            return [
                 DbQuestion.get_from_db(
                     question_id=row["question_id"],
                     question=row["question"],
@@ -110,13 +130,30 @@ class QuestionsRepository(BaseRepository):
                     question_type=row["question_type"],
                     points=row["points"],
                     answers=row["answers"],
+                    seconds_to_answer=row["seconds_to_answer"],
                 )
-                if row
-                else None
-            )
+                for row in rows
+            ]
         except Exception as e:
-            logger.error(f"Error getting question by index: {e}")
+            logger.error(f"Error getting quiz questions: {e}")
             raise Errors.ServerError
+
+    def delete_table(self) -> bool:
+        """
+        Deletes the questions table.
+        """
+        try:
+            self.cursor.execute(
+                """
+                DROP TABLE IF EXISTS questions
+                """
+            )
+            self.connection.commit()
+
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting table: {e}")
+            return False
 
 
 class QuizParticipentsRepository(BaseRepository):
@@ -391,6 +428,64 @@ class QuizDataRepository(BaseRepository):
             return None
 
 
+class QuizParticipantsAnswersRepository(BaseRepository):
+    def create_table(self):
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quiz_participants_answers (
+                session_id TEXT,
+                user_id TEXT,
+                question_id TEXT,
+                answer_id TEXT,
+                points INTEGER,
+                is_correct BOOLEAN,
+                timestamp INTEGER,
+                quiz_id TEXT,
+                PRIMARY KEY (session_id, user_id, question_id),
+                FOREIGN KEY (session_id) REFERENCES quiz_sessions(session_id),
+                FOREIGN KEY (user_id) REFERENCES users(user_id),
+                FOREIGN KEY (question_id, quiz_id) REFERENCES questions(question_id, quiz_id)  -- Fixed foreign key reference
+            )
+            """
+        )
+        self.connection.commit()
+
+    def insert_users_answer(self, user_answer: UserAnswer) -> None:
+        try:
+            self.cursor.execute(
+                """
+                INSERT INTO quiz_participants_answers (
+                    session_id,quiz_id, user_id, question_id, answer_id, points, is_correct, timestamp
+                )
+                VALUES (%s, %s,%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    user_answer.session_id,
+                    user_answer.quiz_id,
+                    user_answer.user_id,
+                    user_answer.question_id,
+                    user_answer.answer_id,
+                    user_answer.points,
+                    user_answer.is_correct,
+                    user_answer.timestamp,
+                ),
+            )
+            self.connection.commit()
+        except Exception as e:
+            logger.error(f"Error inserting user answer: {e}")
+
+    def delete_all_rows(self):
+        try:
+            self.cursor.execute(
+                """
+                DELETE FROM quiz_participants_answers
+                """
+            )
+            self.connection.commit()
+        except Exception as e:
+            logger.error(f"Error deleting all rows: {e}")
+
+
 class DbManager:
     def __init__(self):
         self.connection = psycopg2.connect(DB_URL)
@@ -400,6 +495,9 @@ class DbManager:
         self.questions = QuestionsRepository(self.connection)
         self.quiz_participents = QuizParticipentsRepository(self.connection)
         self.quiz_sessions = QuizSessionsRepository(self.connection)
+        self.quiz_participants_answers = QuizParticipantsAnswersRepository(
+            self.connection
+        )
 
     def create_tables(self):
         self.users.create_table()
@@ -408,6 +506,7 @@ class DbManager:
         self.quiz_permissions.create_table()
         self.questions.create_table()
         self.quiz_participents.create_table()
+        self.quiz_participants_answers.create_table()
 
     def close(self):
         self.users.close()
@@ -415,3 +514,11 @@ class DbManager:
         self.questions.close()
         self.quiz_participents.close()
         self.quiz_sessions.close()
+        self.quizzes.close()
+        self.quiz_participants_answers.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

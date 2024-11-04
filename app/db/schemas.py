@@ -1,7 +1,7 @@
 from enum import StrEnum
 import json
 from pydantic import BaseModel, Field, field_validator, model_validator
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 
 
@@ -94,9 +94,23 @@ class AnswerOption(BaseModel):
     correct_answer: bool = Field(
         default=False, description="Whether this option is the correct answer"
     )
+    answer_id: str = Field(
+        ..., description="The unique identifier for the answer option"
+    )
+    question_id: str = Field(..., description="The unique identifier for the question")
+
+    quiz_id: str = Field(
+        ..., description="The unique identifier for the quiz the question belongs to"
+    )
 
     def model_dump_json(self):
-        return {"answer": self.answer, "correct_answer": self.correct_answer}
+        return {
+            "answer": self.answer,
+            "correct_answer": self.correct_answer,
+            "answer_id": self.answer_id,
+            "question_id": self.question_id,
+            "quiz_id": self.quiz_id,
+        }
 
 
 class AnswerOptions(BaseModel):
@@ -113,6 +127,13 @@ class AnswerOptions(BaseModel):
     def from_json(cls, answers: dict):
         return cls(answers=answers)
 
+    @model_validator(mode="after")
+    def validate_answers_id(cls, v):
+        unique_ids = set([answer.answer_id for answer in v.answers])
+        if len(unique_ids) != len(v.answers):
+            raise ValueError("Answer IDs must be unique")
+        return v
+
 
 class DbQuestion(BaseModel):
     question_id: str
@@ -122,6 +143,7 @@ class DbQuestion(BaseModel):
     answers: AnswerOptions
     question_type: QuestionType
     quiz_id: Optional[str] = None
+    seconds_to_answer: Optional[int] = 60
 
     @model_validator(mode="after")
     def validate_answers(cls, v):
@@ -156,6 +178,7 @@ class DbQuestion(BaseModel):
             "points": self.points,
             "answers": self.answers.model_dump_json(),
             "question_type": self.question_type,
+            "seconds_to_answer": self.seconds_to_answer,
         }
 
     def client_model_dump_json(self):
@@ -165,6 +188,7 @@ class DbQuestion(BaseModel):
             "question_number": self.question_number,
             "points": self.points,
             "question_type": self.question_type,
+            "seconds_to_answer": self.seconds_to_answer,
         }
 
     @classmethod
@@ -176,6 +200,7 @@ class DbQuestion(BaseModel):
         points: int,
         answers: str,
         question_type: str,
+        seconds_to_answer: int,
     ):
         return cls(
             question_id=question_id,
@@ -184,6 +209,7 @@ class DbQuestion(BaseModel):
             points=points,
             answers=AnswerOptions.from_json(answers),
             question_type=QuestionType.from_str(question_type),
+            seconds_to_answer=seconds_to_answer,
         )
 
     @classmethod
@@ -195,7 +221,11 @@ class DbQuestion(BaseModel):
             points=question_dict.get("points"),
             answers=AnswerOptions(answers=question_dict.get("answers")),
             question_type=QuestionType(question_dict.get("question_type")),
+            seconds_to_answer=question_dict.get("seconds_to_answer"),
         )
+
+    def get_end_timestamp(self, current_timestamp: datetime):
+        return current_timestamp + self.seconds_to_answer
 
 
 class DbQuiz(BaseModel):
@@ -225,3 +255,19 @@ class DbQuiz(BaseModel):
             quiz_name=quiz_dict.get("quiz_name"),
             quiz_description=quiz_dict.get("quiz_description"),
         )
+
+
+class UserAnswer(BaseModel):
+    user_id: str
+    question_id: str
+    answer_id: str
+    timestamp: int
+    session_id: str
+    quiz_id: str
+    points: int
+    is_correct: bool
+    quiz_id: str
+
+    @classmethod
+    def from_option(cls, option: dict):
+        pass

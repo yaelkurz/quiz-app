@@ -57,17 +57,17 @@ async def main_ws(websocket: WebSocket, session_id: str):
 
     logger.info(f"Moderator connected to session {session_id}")
 
-    if not await manager.validate_connection():
+    if not await manager.validate_connection_and_initialize_cache():
         return
 
     try:
 
         await manager.send_initial_payload()
 
-        (pubsub_task, ws_task, heartbeat_task) = manager.manage_tasks()
+        tasks = manager.manage_tasks()
 
         done, pending = await asyncio.wait(
-            [pubsub_task, ws_task, heartbeat_task],
+            tasks,
             return_when=asyncio.FIRST_COMPLETED,
             timeout=WEBSOCKET_TIMEOUT,
         )
