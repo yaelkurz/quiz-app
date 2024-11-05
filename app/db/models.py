@@ -496,12 +496,14 @@ class QuizParticipantsAnswersRepository(BaseRepository):
         try:
             self.cursor.execute(
                 """
-                SELECT qpa.user_id, u.username, SUM(qpa.points) as score
-                FROM quiz_participants_answers qpa
-                JOIN users u ON qpa.user_id = u.user_id
-                WHERE qpa.session_id = %s AND qpa.quiz_id = %s
-                GROUP BY qpa.user_id, u.username
-                ORDER BY score DESC
+            SELECT qpa.user_id,
+            u.username,
+            SUM(CASE WHEN qpa.is_correct = true THEN qpa.points ELSE 0 END) as score
+            FROM quiz_participants_answers qpa
+            JOIN users u ON qpa.user_id = u.user_id
+            WHERE qpa.session_id = %s AND qpa.quiz_id = %s
+            GROUP BY qpa.user_id, u.username
+            ORDER BY score DESC
                 """,
                 (session_id, quiz_id),
             )

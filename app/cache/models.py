@@ -126,7 +126,7 @@ class CacheManager:
             quiz_data = self.client.get(cache_key)
             if quiz_data:
                 quiz_data_dict = json.loads(quiz_data.decode())
-                return QuizData(
+                quiz_data = QuizData(
                     session_id=quiz_data_dict.get("session_id"),
                     quiz_state=quiz_data_dict.get("quiz_state"),
                     quiz_id=quiz_data_dict.get("quiz_id"),
@@ -148,7 +148,16 @@ class CacheManager:
                         for q in quiz_data_dict.get("questions")
                     ],
                 )
-
+                if quiz_data_dict.get("results"):
+                    quiz_data.results = [
+                        UserResults(
+                            username=result.get("username"),
+                            score=result.get("score"),
+                            user_id=result.get("user_id"),
+                        )
+                        for result in quiz_data_dict.get("results")
+                    ]
+                return quiz_data
             else:
                 raise Errors.ServerError(
                     status_code=500,
@@ -262,6 +271,8 @@ class QuizData(BaseModel):
 
     def get_results(self):
         self.quiz_state = QuizState.SHOW_RESULTS
+        self.current_question_end_timestamp = None
+        self.current_question = None
         self.results = db_manager.quiz_participants_answers.get_quiz_results(
             self.session_id, self.quiz_id
         )
