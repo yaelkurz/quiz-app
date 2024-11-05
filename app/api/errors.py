@@ -54,3 +54,21 @@ class Errors:
     ServerError = ErrorBase(
         status_code=500, error_code=5000, message="Internal Server Error"
     )
+
+
+class UserLeftException(Exception):
+    def __init__(self):
+        super().__init__()
+        self.message = "User Left"
+
+        def __str__(self):
+            return "User Left"
+
+
+class QuizEndedException(Exception):
+    def __init__(self):
+        super().__init__()
+        self.message = "Quiz Ended"
+
+        def __str__(self):
+            return "Quiz Ended"

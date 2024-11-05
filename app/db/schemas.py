@@ -1,5 +1,6 @@
 from enum import StrEnum
 import json
+from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -31,6 +32,10 @@ class DbUser(BaseModel):
         return cls(
             user_id=user_id, username=username, email=email, create_date=create_date
         )
+
+    @classmethod
+    def generate_new_id(cls) -> str:
+        return str(uuid4())
 
 
 class DbParticipent(BaseModel):
@@ -84,6 +89,14 @@ class DbSession(BaseModel):
             end_date=end_datetime,
         )
 
+    @classmethod
+    def generate_room_id(cls) -> str:
+        return str(uuid4())
+
+    @classmethod
+    def generate_session_id(cls) -> str:
+        return str(uuid4())
+
 
 class AnswerOption(BaseModel):
     """
@@ -111,6 +124,10 @@ class AnswerOption(BaseModel):
             "question_id": self.question_id,
             "quiz_id": self.quiz_id,
         }
+
+    @classmethod
+    def generate_answer_id(cls) -> str:
+        return str(uuid4())
 
 
 class AnswerOptions(BaseModel):
@@ -201,6 +218,7 @@ class DbQuestion(BaseModel):
         answers: str,
         question_type: str,
         seconds_to_answer: int,
+        quiz_id: str,
     ):
         return cls(
             question_id=question_id,
@@ -210,6 +228,7 @@ class DbQuestion(BaseModel):
             answers=AnswerOptions.from_json(answers),
             question_type=QuestionType.from_str(question_type),
             seconds_to_answer=seconds_to_answer,
+            quiz_id=quiz_id,
         )
 
     @classmethod
@@ -224,8 +243,9 @@ class DbQuestion(BaseModel):
             seconds_to_answer=question_dict.get("seconds_to_answer"),
         )
 
-    def get_end_timestamp(self, current_timestamp: datetime):
-        return current_timestamp + self.seconds_to_answer
+    @classmethod
+    def generate_question_id(self) -> str:
+        return str(uuid4())
 
 
 class DbQuiz(BaseModel):
@@ -256,6 +276,10 @@ class DbQuiz(BaseModel):
             quiz_description=quiz_dict.get("quiz_description"),
         )
 
+    @classmethod
+    def generate_quiz_id(self):
+        return str(uuid4())
+
 
 class UserAnswer(BaseModel):
     user_id: str
@@ -268,6 +292,15 @@ class UserAnswer(BaseModel):
     is_correct: bool
     quiz_id: str
 
-    @classmethod
-    def from_option(cls, option: dict):
-        pass
+
+class UserResults(BaseModel):
+    user_id: str
+    score: int
+    username: str
+
+    def model_dump_json(self):
+        return {
+            "user_id": self.user_id,
+            "score": self.score,
+            "username": self.username,
+        }

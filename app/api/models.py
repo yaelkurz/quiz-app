@@ -1,17 +1,20 @@
 import asyncio
 import os
-from typing import Any, Optional, List
+from typing import Any, Dict, Optional, List
 from fastapi import WebSocket
 import logging
+
+from pydantic import BaseModel
 from app.cache.models import CacheManager, PubSubManager, QuizData
 from app.db.models import DbManager, DbUser
 from app.cache.schemas import QuizState
 from app.api.schemas import WsConnectionType
-from app.api.errors import Errors
+from app.api.errors import Errors, QuizEndedException
 from app.api.handlers import (
     handle_message,
     get_payload,
 )
+from app.db.schemas import DbQuiz
 
 logger = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "3"))
@@ -97,6 +100,7 @@ class WebSocketManager:
                     return
 
                 if message:
+                    message = handle_pubsub_msg(message, self.quiz_data)
                     await self.dispatch_to_client(message)
 
         except Exception as e:
@@ -117,7 +121,7 @@ class WebSocketManager:
 
                 self.quiz_data = self.cache_manager.get_quiz_data(self.session_id)
 
-                self.quiz_data = handle_message(
+                self.quiz_data, moderator_event, participant_event = handle_message(
                     message,
                     self.quiz_data,
                     self.connection_type,
@@ -125,13 +129,17 @@ class WebSocketManager:
                     self.cache_manager.get_timestamp(),
                 )
 
-                self.cache_manager.update_quiz_data(self.quiz_data)
+                if self.quiz_data is not None:
+                    # Only when quiz_data is updated by moderator - send to all participants
+                    self.cache_manager.update_quiz_data(self.quiz_data)
 
-                payload = get_payload(self.quiz_data)
+                    payload = get_payload(
+                        self.quiz_data, moderator_event, participant_event
+                    )
 
-                self.pubsub_manager.add_payload_to_publish_queue(
-                    self.session_id, payload
-                )
+                    self.pubsub_manager.add_payload_to_publish_queue(
+                        self.session_id, payload
+                    )
 
         except Exception as e:
             logger.info(f"error in listen_to_websocket: {e}")
@@ -249,7 +257,7 @@ class WebSocketManager:
 
                 if current_timestamp >= end_timestamp:
 
-                    self.quiz_data = handle_message(
+                    self.quiz_data, _, _ = handle_message(
                         {"type": "timeout"},
                         self.quiz_data,
                         self.connection_type,
@@ -270,3 +278,52 @@ class WebSocketManager:
         except Exception as e:
             logger.error(f"Error in question_clock: {e}")
             raise e
+
+
+def handle_pubsub_msg(message: dict, quiz_data: QuizData) -> dict:
+    """
+    Handle the pub/sub message and update the quiz data.
+    """
+    try:
+        type = message.get("type")
+        if type == "end":
+            raise QuizEndedException
+        return message
+    except Exception as e:
+        if e != QuizEndedException:
+            logger.error(f"Error in handle_pubsub_msg: {e}")
+        raise e
+
+
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+
+
+class NewSessionRequest(BaseModel):
+    quiz_id: str
+    user_id: str
+
+
+class NewQuizRequestAnswer(BaseModel):
+    answer: str
+    correct_answer: bool
+
+
+class NewQuizRequestQuestion(BaseModel):
+    question: str
+    question_type: str
+    points: int
+    seconds_to_answer: int
+    answers: List[NewQuizRequestAnswer]
+
+
+class NewQuizRequestQuiz(BaseModel):
+    name: str
+    description: str
+    questions: List[NewQuizRequestQuestion]
+
+
+class NewQuizRequest(BaseModel):
+    quiz: NewQuizRequestQuiz
+    user_id: str

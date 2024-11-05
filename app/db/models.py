@@ -12,6 +12,7 @@ from app.db.schemas import (
     DbQuestion,
     DbQuiz,
     UserAnswer,
+    UserResults,
 )
 from app.api.errors import Errors
 
@@ -131,6 +132,7 @@ class QuestionsRepository(BaseRepository):
                     points=row["points"],
                     answers=row["answers"],
                     seconds_to_answer=row["seconds_to_answer"],
+                    quiz_id=quiz_id,
                 )
                 for row in rows
             ]
@@ -458,6 +460,11 @@ class QuizParticipantsAnswersRepository(BaseRepository):
                     session_id,quiz_id, user_id, question_id, answer_id, points, is_correct, timestamp
                 )
                 VALUES (%s, %s,%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (session_id, user_id, question_id) DO UPDATE SET
+                    answer_id = EXCLUDED.answer_id,
+                    points = EXCLUDED.points,
+                    is_correct = EXCLUDED.is_correct,
+                    timestamp = EXCLUDED.timestamp
                 """,
                 (
                     user_answer.session_id,
@@ -484,6 +491,28 @@ class QuizParticipantsAnswersRepository(BaseRepository):
             self.connection.commit()
         except Exception as e:
             logger.error(f"Error deleting all rows: {e}")
+
+    def get_quiz_results(self, session_id, quiz_id):
+        try:
+            self.cursor.execute(
+                """
+                SELECT qpa.user_id, u.username, SUM(qpa.points) as score
+                FROM quiz_participants_answers qpa
+                JOIN users u ON qpa.user_id = u.user_id
+                WHERE qpa.session_id = %s AND qpa.quiz_id = %s
+                GROUP BY qpa.user_id, u.username
+                ORDER BY score DESC
+                """,
+                (session_id, quiz_id),
+            )
+            rows = self.cursor.fetchall()
+            return [
+                UserResults(user_id=row[0], username=row[1], score=row[2])
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error(f"Error getting quiz results: {e}")
+            return None
 
 
 class DbManager:

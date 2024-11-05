@@ -2,7 +2,8 @@ import asyncio
 import logging
 import json
 from app.cache.schemas import QuizState
-from app.db.schemas import DbSession, DbQuestion
+from app.db.schemas import DbSession, DbQuestion, UserResults
+from app.db.models import DbManager
 from app.api.errors import Errors
 from pydantic import BaseModel, field_validator
 from typing import Optional, AsyncGenerator, Dict, List
@@ -14,6 +15,8 @@ logger = logging.getLogger(__name__)
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+
+db_manager = DbManager()
 
 
 class CacheManager:
@@ -188,13 +191,14 @@ class QuizData(BaseModel):
     current_question: Optional[DbQuestion]
     current_question_end_timestamp: Optional[int] = None
     questions: List[DbQuestion]
+    results: Optional[List[UserResults]] = None
 
     @field_validator("quiz_state")
     def validate_quiz_state(cls, v):
         return v.value
 
     def model_dump_json(self):
-        return {
+        json_ = {
             "session_id": self.session_id,
             "quiz_state": self.quiz_state,
             "quiz_id": self.quiz_id,
@@ -207,6 +211,13 @@ class QuizData(BaseModel):
             "current_question_end_timestamp": self.current_question_end_timestamp,
             "questions": [q.model_dump_json() for q in self.questions],
         }
+        if self.results:
+            json_["results"] = sorted(
+                [r.model_dump_json() for r in self.results],
+                key=lambda x: x.get("score"),
+                reverse=True,
+            )
+        return json_
 
     def client_model_dump_json(self):
         """
@@ -229,8 +240,8 @@ class QuizData(BaseModel):
         self.quiz_state = QuizState.ACTIVE
         self.current_question_number = 1
         self.current_question = self.questions[self.current_question_number - 1]
-        self.current_question_end_timestamp = self.current_question.get_end_timestamp(
-            current_timestamp
+        self.current_question_end_timestamp = (
+            current_timestamp + self.current_question.seconds_to_answer
         )
 
     def timeout_question(self):
@@ -241,13 +252,25 @@ class QuizData(BaseModel):
         self.current_question_number += 1
         self.current_question = self.questions[self.current_question_number - 1]
         self.quiz_state = QuizState.ACTIVE
-        self.current_question_end_timestamp = self.current_question.get_end_timestamp(
-            current_timestamp
+        self.current_question_end_timestamp = (
+            current_timestamp + self.current_question.seconds_to_answer
         )
 
     def end_quiz(self):
         self.quiz_state = QuizState.ENDED
         self.current_question_end_timestamp = None
+
+    def get_results(self):
+        self.quiz_state = QuizState.SHOW_RESULTS
+        self.results = db_manager.quiz_participants_answers.get_quiz_results(
+            self.session_id, self.quiz_id
+        )
+
+    def pretty_print_results(self):
+        pretty_str = ""
+        for result in self.results:
+            pretty_str += f"User: {result.username} Score: {result.score}\n"
+        return pretty_str
 
 
 class PubSubManager:
